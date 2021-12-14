@@ -99,7 +99,6 @@ function main() {
               if (!collected.content || collected.author.bot) { return; }
               const walletAddress = collected.content;
               const walletUser = `${collected.author.username}#${collected.author.discriminator}`;
-              waitlistQueue.push(`${walletUser}:${walletAddress}`);
               const embed = new MessageEmbed()
                 .setColor('#0099ff')
                 .setTitle(walletAddress);
@@ -126,7 +125,7 @@ function main() {
             
                     }
                 ]
-              })
+              }).then(() => { waitlistQueue.push(`${walletUser}:${walletAddress}`) });
             });
             collector.on('end', (collected, reason) => {
               if (reason === 'time' && collected.size === 0) {

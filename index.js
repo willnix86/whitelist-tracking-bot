@@ -7,9 +7,10 @@ require('dotenv').config();
 
 const fName = `./${process.env.WHITELIST_FILENAME}.xlsx`;
 const worksheetName = 'Wallet Addresses';
+let interactionListener = false;
 
 const waitlistQueue = new Queue(function (input, cb) {
-  const { id, address } = input;
+  const {id, address} = input;
   console.log(`Adding ${id} to waitlist`);
   addToWaitlist(id, address);
   cb(null, result);
@@ -103,20 +104,22 @@ function main() {
                 .setColor('#0099ff')
                 .setTitle(walletAddress);
 
-              // Watch for responses from the user to the buttons we're about to send them
-              client.on('interactionCreate', interaction => {
-                if (interaction.componentType !== 'BUTTON') return;
-                try {
-                  if (interaction.customId === 'confirm') {
-                    waitlistQueue.push({id: walletUser, address: walletAddress});
-                    interaction.reply("Got it! You're all set - we've added your address to the whitelist!")
-                  } else if (interaction.customId === 'decline') {
-                    interaction.reply("OK, try again!");
-                  }
-                } catch (error) {
-                  console.log(error);
+                if (!interactionListener) {
+                  client.on('interactionCreate', interaction => {
+                    if (interaction.componentType !== 'BUTTON') return;
+                    try {
+                      if (interaction.customId === 'confirm') {
+                        waitlistQueue.push({id: walletUser, address: walletAddress})
+                        interaction.reply("Got it! You're all set - we've added your address to the whitelist!")
+                      } else if (interaction.customId === 'decline') {
+                        interaction.reply("OK, try again!");
+                      }
+                    } catch (error) {
+                      console.log(error);
+                    }
+                  });
+                  interactionListener = true;
                 }
-              });
 
               user.send({
                 "content": "Is this correct?",

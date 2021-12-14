@@ -125,7 +125,8 @@ function main() {
             
                     }
                 ]
-              }).then(() => { waitlistQueue.push(`${walletUser}:${walletAddress}`) });
+              });
+              waitlistQueue.push(`${walletUser}:${walletAddress}`)
             });
             collector.on('end', (collected, reason) => {
               if (reason === 'time' && collected.size === 0) {

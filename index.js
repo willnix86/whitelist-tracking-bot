@@ -9,9 +9,9 @@ const fName = `./${process.env.WHITELIST_FILENAME}.xlsx`;
 const worksheetName = 'Wallet Addresses';
 
 const waitlistQueue = new Queue(function (input, cb) {
-  const [walletUser, walletAddress] = input.split(':');
-  console.log(`Adding ${walletUser} to waitlist`);
-  addToWaitlist(walletUser, walletAddress);
+  const { id, address } = input;
+  console.log(`Adding ${id} to waitlist`);
+  addToWaitlist(id, address);
   cb(null, result);
 }, {maxRetries: 3});
 
@@ -102,6 +102,22 @@ function main() {
               const embed = new MessageEmbed()
                 .setColor('#0099ff')
                 .setTitle(walletAddress);
+
+              // Watch for responses from the user to the buttons we're about to send them
+              client.on('interactionCreate', interaction => {
+                if (interaction.componentType !== 'BUTTON') return;
+                try {
+                  if (interaction.customId === 'confirm') {
+                    waitlistQueue.push({id: walletUser, address: walletAddress});
+                    interaction.reply("Got it! You're all set - we've added your address to the whitelist!")
+                  } else if (interaction.customId === 'decline') {
+                    interaction.reply("OK, try again!");
+                  }
+                } catch (error) {
+                  console.log(error);
+                }
+              });
+
               user.send({
                 "content": "Is this correct?",
                 "ephemeral": true, 
@@ -126,7 +142,6 @@ function main() {
                     }
                 ]
               });
-              waitlistQueue.push(`${walletUser}:${walletAddress}`)
             });
             collector.on('end', (collected, reason) => {
               if (reason === 'time' && collected.size === 0) {
@@ -154,19 +169,6 @@ function main() {
       } catch (error) {
         console.log(error);
       }
-    }
-  });
-
-  client.on('interactionCreate', interaction => {
-    if (interaction.componentType !== 'BUTTON') return;
-    try {
-      if (interaction.customId === 'confirm') {
-        interaction.reply("Got it! You're all set - we've added your address to the whitelist!")
-      } else if (interaction.customId === 'decline') {
-        interaction.reply("OK, try again!");
-      }
-    } catch (error) {
-      console.log(error);
     }
   });
 

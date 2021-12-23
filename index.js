@@ -1,10 +1,18 @@
 const { Client, Intents, MessageEmbed, MessageAttachment } = require('discord.js');
 const fs = require('fs');
 const reader = require('xlsx');
-var Queue = require('better-queue');
+const AWS = require('aws-sdk');
+const Queue = require('better-queue');
 
 require('dotenv').config();
 
+const s3 = new AWS.S3({
+  region: 'ap-southeast-1',
+  accessKeyId: process.env.AWS_ACCESS_KEY,
+  secretAccessKey: process.env.AWS_SECRET_KEY
+});
+
+const bucketName = 'whitelist-tracker-bot';
 const fName = `./${process.env.WHITELIST_FILENAME}.xlsx`;
 const worksheetName = 'Wallet Addresses';
 let interactionListener = false;
@@ -16,30 +24,54 @@ const waitlistQueue = new Queue(function (input, cb) {
   cb(null, result);
 }, {maxRetries: 3});
 
-function createExcelIfNotExists() {
-  return new Promise((resolve, reject) => {
-    fs.access(fName, async (err) => {
-      if (err) {
-        try {
-          console.log("Creating file...");
-          const workbook = reader.utils.book_new();
-          const worksheet = reader.utils.json_to_sheet([
-            {User: "", WalletAddress: ""}
-          ]);
-          reader.utils.book_append_sheet(workbook, worksheet, worksheetName);
-          const result = await reader.writeFile(workbook, fName);
-          console.log("File created - carry on!")
-          resolve(true);
-        } catch (error) {
-          reject(error);
-        }
+function getFile(cb) {
+  return new Promise((resolve) => {
+    const params = {
+      Bucket: bucketName, 
+      Key: fName
+    };
+    console.log(s3);
+    s3.getObject(params, function(error, data) {
+      if (error) {
+        resolve(cb({error}))
       } else {
-        console.log("File exists - carry on!")
-        resolve(true);
+        resolve(cb({data}));
       }
     });
-  })
+  });
+}
 
+function createExcelIfNotExists() {
+  return new Promise(async (resolve, reject) => {
+    getFile((result) => {
+      console.log(result);
+      if (result.error) {
+        reject(result.error);
+      } else {
+        resolve(true);
+      }
+    })
+    // fs.access(fName, async (err) => {
+    //   if (err) {
+    //     try {
+    //       console.log("Creating file...");
+    //       const workbook = reader.utils.book_new();
+    //       const worksheet = reader.utils.json_to_sheet([
+    //         {User: "", WalletAddress: ""}
+    //       ]);
+    //       reader.utils.book_append_sheet(workbook, worksheet, worksheetName);
+    //       const result = await reader.writeFile(workbook, fName);
+    //       console.log("File created - carry on!")
+    //       resolve(true);
+    //     } catch (error) {
+    //       reject(error);
+    //     }
+    //   } else {
+    //     console.log("File exists - carry on!")
+    //     resolve(true);
+    //   }
+    // });
+  })
 };
 
 function addToWaitlist(walletUser, walletAddress) {
@@ -83,8 +115,13 @@ function main() {
 
   // When the client is ready, run this code (only once)
   client.once('ready', async () => {
-    await createExcelIfNotExists();
-    console.log("Ready!");
+    const ready = await createExcelIfNotExists();
+    console.log(ready);
+    if (ready) {
+      console.log("Ready!");
+    } else {
+      console.log(ready);
+    }
   });
 
   client.on('message', message => {

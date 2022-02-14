@@ -1,20 +1,26 @@
 const { Client, Intents, MessageEmbed, MessageAttachment } = require('discord.js');
 const fs = require('fs');
 const reader = require('xlsx');
-const AWS = require('aws-sdk');
+const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const Queue = require('better-queue');
 
 require('dotenv').config();
 
-const s3 = new AWS.S3({
+const s3 = new S3Client({
   region: 'ap-southeast-1',
-  accessKeyId: process.env.AWS_ACCESS_KEY,
-  secretAccessKey: process.env.AWS_SECRET_KEY
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
 });
 
-const bucketName = 'whitelist-tracker-bot';
+const bucketName = process.env.BUCKET_NAME;
 const fName = `./${process.env.WHITELIST_FILENAME}.xlsx`;
 const worksheetName = 'Wallet Addresses';
+
+const bucketParams = {
+  Bucket: bucketName, 
+  Key: fName
+};
+
 let interactionListener = false;
 
 const waitlistQueue = new Queue(function (input, cb) {
@@ -24,53 +30,99 @@ const waitlistQueue = new Queue(function (input, cb) {
   cb(null, result);
 }, {maxRetries: 3});
 
-function getFile(cb) {
-  return new Promise((resolve) => {
-    const params = {
-      Bucket: bucketName, 
-      Key: fName
-    };
-    console.log(s3);
-    s3.getObject(params, function(error, data) {
-      if (error) {
-        resolve(cb({error}))
-      } else {
-        resolve(cb({data}));
-      }
-    });
-  });
+async function checkIfFileExistsInS3() {
+  console.log("Checking if file exists...");
+  try {
+    const command = new HeadObjectCommand(bucketParams);
+    await s3.send(command);
+    return true;
+  } catch (error) {
+    if (error.name === 'NotFound') {
+      return false;
+    } else {
+      console.log(error);
+      process.exit(1);
+    }
+  }
+};
+
+async function getFileFromS3() {
+  console.log("Getting file from S3...")
+  const command = new GetObjectCommand(bucketParams);
+  const { Body }  = await s3.send(command);
+  return Body;
+};
+
+async function createFileFromScratch() {
+  try {
+    console.log("Creating file...");
+    const workbook = reader.utils.book_new();
+    const worksheet = reader.utils.json_to_sheet([
+      {User: "", WalletAddress: ""}
+    ]);
+    reader.utils.book_append_sheet(workbook, worksheet, worksheetName);
+    await reader.writeFile(workbook, fName);
+    return true
+  } catch (error) {
+    console.log(error);
+    return false
+  }
+};
+
+async function saveFileToDisk(Body) {
+  console.log("Saving file to disk...");
+  await new Promise((resolve, reject) => {
+    Body.pipe(fs.createWriteStream(fName))
+      .on('error', err => reject(err))
+      .on('close', () => resolve())
+  })
 }
 
-function createExcelIfNotExists() {
+async function saveFileToS3() {
+  console.log("Uploading file to S3...");
+  const command = new PutObjectCommand({
+    ...bucketParams,
+    ContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    Body: fs.createReadStream(fName)
+  });
+  try {
+    await s3.send(command);
+  } catch (error) {
+    console.log(error);
+  }
+}
+
+function fetchOrCreateFileIfNotExists() {
   return new Promise(async (resolve, reject) => {
-    getFile((result) => {
-      console.log(result);
-      if (result.error) {
-        reject(result.error);
+    fs.access(fName, async (err) => {
+      if (err) {
+        try {
+          const fileExists = await checkIfFileExistsInS3();
+          if (fileExists) {
+            const file = await getFileFromS3();
+            await saveFileToDisk(file);
+            resolve(true);
+          } else {
+            try {
+              const fileCreated = await createFileFromScratch();
+              if (fileCreated) {
+                resolve(true);
+              } else {
+                reject(new Error("Failed to create file"));
+              }
+            } catch (error) {
+              reject(error);
+            }
+          }
+        } catch (error) {
+          console.log(error);
+          process.exit(1);
+        }
       } else {
+        console.log("File exists - carry on!")
         resolve(true);
       }
-    })
-    // fs.access(fName, async (err) => {
-    //   if (err) {
-    //     try {
-    //       console.log("Creating file...");
-    //       const workbook = reader.utils.book_new();
-    //       const worksheet = reader.utils.json_to_sheet([
-    //         {User: "", WalletAddress: ""}
-    //       ]);
-    //       reader.utils.book_append_sheet(workbook, worksheet, worksheetName);
-    //       const result = await reader.writeFile(workbook, fName);
-    //       console.log("File created - carry on!")
-    //       resolve(true);
-    //     } catch (error) {
-    //       reject(error);
-    //     }
-    //   } else {
-    //     console.log("File exists - carry on!")
-    //     resolve(true);
-    //   }
-    // });
+    });
   })
 };
 
@@ -79,7 +131,7 @@ function addToWaitlist(walletUser, walletAddress) {
     fs.access(fName, async (err) => {
       if (err) {
         try {
-          await createExcelIfNotExists();
+          await fetchOrCreateFileIfNotExists();
           addToWaitlist(walletUser, walletAddress);
         } catch (error) {
           reject(error);
@@ -99,7 +151,8 @@ function addToWaitlist(walletUser, walletAddress) {
             });
           }
           workbook.Sheets[worksheetName] = reader.utils.json_to_sheet(dataToUpdate);
-          const result = await reader.writeFile(workbook, fName);
+          await reader.writeFile(workbook, fName);
+          await saveFileToS3();
           resolve(true);
         } catch (error) {
           reject(error);
@@ -115,7 +168,7 @@ function main() {
 
   // When the client is ready, run this code (only once)
   client.once('ready', async () => {
-    const ready = await createExcelIfNotExists();
+    const ready = await fetchOrCreateFileIfNotExists();
     console.log(ready);
     if (ready) {
       console.log("Ready!");
